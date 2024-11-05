@@ -1,0 +1,46 @@
+image: docker:stable
+
+services:
+  - docker:dind
+
+variables:
+  DOCKER_HOST: tcp://docker:2375/
+  DOCKER_TLS_CERTDIR: ""
+
+stages:
+  - build
+
+build root image:
+  stage: build
+  tags:
+    - microservice
+  before_script:
+    - echo "$REGISTRY_PASSWORD" | docker login $CI_REGISTRY -u microservice --password-stdin
+  script:
+    - docker pull $CI_REGISTRY_IMAGE:latest || true
+    - docker build . --cache-from $CI_REGISTRY_IMAGE:latest -t $CI_REGISTRY_IMAGE:latest -t $CI_REGISTRY_IMAGE:$CI_COMMIT_SHA
+    - docker push $CI_REGISTRY_IMAGE:latest
+    - docker push $CI_REGISTRY_IMAGE:$CI_COMMIT_SHA
+  only:
+    - main
+
+deploy stage:
+  stage: deploy
+  tags:
+    - microservice
+  before_script:
+    - mkdir ~/.ssh
+    - echo -e "${SERVER_KEY_PEM//_/\\n}" > ~/.ssh/key.pem
+    - apt-get -y update && apt-get -y install openssh-client rsync grsync
+    - ssh-keyscan -H $SERVER_IP >> ~/.ssh/known_hosts
+    - chmod 400 ~/.ssh/rnd-ecommerce.pem
+  script:
+    - |
+      sudo ssh -i ~/.ssh/key.pem $SERVER_USER@$SERVER_IP << EOF
+        kubectl set image deployment/api-gateway api-gateway=$CI_REGISTRY_IMAGE:$CI_COMMIT_SHA
+        kubectl set image deployment/news-service news-service=$CI_REGISTRY_IMAGE:$CI_COMMIT_SHA
+        kubectl set image deployment/categories-service categories-service=$CI_REGISTRY_IMAGE:$CI_COMMIT_SHA
+        exit
+      EOF
+  only:
+    - main
